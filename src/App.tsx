@@ -15,6 +15,24 @@ type AppView =
   | { type: 'qa'; session: PatentSession; questions: AIQuestion[] }
   | { type: 'draft'; session: PatentSession; draft: PatentDraft };
 
+type DbQuestion = {
+  question_number: number;
+  category: string;
+  question_text: string;
+  why_it_matters?: string | null;
+  example_answer?: string | null;
+};
+
+function toAIQuestions(rows: DbQuestion[]): AIQuestion[] {
+  return rows.map(q => ({
+    number: q.question_number,
+    category: q.category,
+    question: q.question_text,
+    why_it_matters: q.why_it_matters || undefined,
+    example_answer: q.example_answer || undefined,
+  }));
+}
+
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   state = { hasError: false, error: null as Error | null };
 
@@ -211,13 +229,15 @@ function AppContent() {
     setDrafting(true);
     setError('');
     try {
-      for (let i = 0; i < questions.length; i++) {
-        await supabase
-          .from('session_questions')
-          .update({ answer_text: answers[i] })
-          .eq('session_id', session.id)
-          .eq('question_number', questions[i].number);
-      }
+      await Promise.all(
+        questions.map((q, i) =>
+          supabase
+            .from('session_questions')
+            .update({ answer_text: answers[i] })
+            .eq('session_id', session.id)
+            .eq('question_number', q.number)
+        )
+      );
 
       await supabase
         .from('patent_sessions')
@@ -320,14 +340,7 @@ function AppContent() {
         .order('question_number');
 
       if (dbQuestions && dbQuestions.length > 0) {
-        const questions: AIQuestion[] = dbQuestions.map(q => ({
-          number: q.question_number,
-          category: q.category,
-          question: q.question_text,
-          why_it_matters: q.why_it_matters || undefined,
-          example_answer: q.example_answer || undefined,
-        }));
-        setView({ type: 'qa', session, questions });
+        setView({ type: 'qa', session, questions: toAIQuestions(dbQuestions) });
         return;
       }
     }
@@ -343,14 +356,11 @@ function AppContent() {
       .order('question_number');
 
     if (dbQuestions && dbQuestions.length > 0) {
-      const questions: AIQuestion[] = dbQuestions.map(q => ({
-        number: q.question_number,
-        category: q.category,
-        question: q.question_text,
-        why_it_matters: q.why_it_matters || undefined,
-        example_answer: q.example_answer || undefined,
-      }));
-      setView({ type: 'qa', session: { ...session, status: SESSION_STATUS.QUESTIONING }, questions });
+      setView({
+        type: 'qa',
+        session: { ...session, status: SESSION_STATUS.QUESTIONING },
+        questions: toAIQuestions(dbQuestions),
+      });
     }
   }
 

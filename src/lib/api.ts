@@ -26,6 +26,20 @@ async function parseErrorResponse(res: Response): Promise<string> {
   }
 }
 
+// Single point of truth for calling the patent-ai edge function: builds auth
+// headers, POSTs the body, and surfaces a friendly error on failure. Callers
+// validate the shape of the returned JSON themselves.
+async function callFunction(action: string, body: unknown): Promise<Record<string, unknown>> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(`${FUNCTIONS_URL}/${action}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
+  return res.json();
+}
+
 export type AIQuestion = {
   number: number;
   category: string;
@@ -134,58 +148,30 @@ function validateDraft(data: Record<string, unknown>): AIDraft {
 }
 
 export async function patentabilityCheck(title: string, description: string): Promise<PatentabilityCheck> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/patentability-check`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ title, description }),
-  });
-  if (!res.ok) throw new Error(await parseErrorResponse(res));
-  const data = await res.json();
-  if (typeof data.check?.confidence !== 'number') throw new Error('Invalid patentability check response');
-  return data.check;
+  const data = await callFunction('patentability-check', { title, description });
+  const check = data.check as PatentabilityCheck | undefined;
+  if (typeof check?.confidence !== 'number') throw new Error('Invalid patentability check response');
+  return check;
 }
 
 export async function translateClaimsToPlainEnglish(
   claims: Array<{ number: number; type: string; text: string }>,
   title: string
 ): Promise<ClaimPlainEnglish[]> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/plain-english`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ claims, title }),
-  });
-  if (!res.ok) throw new Error(await parseErrorResponse(res));
-  const data = await res.json();
+  const data = await callFunction('plain-english', { claims, title });
   if (!Array.isArray(data.translations)) throw new Error('Invalid plain-English response');
   return data.translations;
 }
 
 export async function priorArtSearch(title: string, description: string): Promise<PriorArtSearchResult> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/prior-art-search`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ title, description }),
-  });
-  if (!res.ok) throw new Error(await parseErrorResponse(res));
-  const data = await res.json();
-  if (!data.search?.search_queries) throw new Error('Invalid prior art search response');
-  return data.search;
+  const data = await callFunction('prior-art-search', { title, description });
+  const search = data.search as PriorArtSearchResult | undefined;
+  if (!search?.search_queries) throw new Error('Invalid prior art search response');
+  return search;
 }
 
 export async function analyzeDescription(description: string): Promise<AIQuestion[]> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/analyze`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ description }),
-  });
-  if (!res.ok) {
-    throw new Error(await parseErrorResponse(res));
-  }
-  const data = await res.json();
+  const data = await callFunction('analyze', { description });
   return validateQuestions(data.questions);
 }
 
@@ -196,29 +182,13 @@ export async function generateDraft(
   title: string,
   priorArt?: PriorArtReference[]
 ): Promise<AIDraft> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/draft`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ description, questions, answers, title, prior_art: priorArt }),
-  });
-  if (!res.ok) {
-    throw new Error(await parseErrorResponse(res));
-  }
-  const data = await res.json();
-  return validateDraft(data.draft);
+  const data = await callFunction('draft', { description, questions, answers, title, prior_art: priorArt });
+  return validateDraft(data.draft as Record<string, unknown>);
 }
 
 export async function expressDraft(title: string, description: string, priorArt?: PriorArtReference[]): Promise<AIDraft> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/express-draft`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ title, description, prior_art: priorArt }),
-  });
-  if (!res.ok) throw new Error(await parseErrorResponse(res));
-  const data = await res.json();
-  return validateDraft(data.draft);
+  const data = await callFunction('express-draft', { title, description, prior_art: priorArt });
+  return validateDraft(data.draft as Record<string, unknown>);
 }
 
 export async function refineClaim(
@@ -228,35 +198,20 @@ export async function refineClaim(
   allClaims: Array<{ number: number; text: string }>,
   title: string
 ): Promise<{ refined_text: string; explanation: string }> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/refine-claim`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      claim_number: claimNumber,
-      claim_text: claimText,
-      instruction,
-      all_claims: allClaims,
-      title,
-    }),
+  const data = await callFunction('refine-claim', {
+    claim_number: claimNumber,
+    claim_text: claimText,
+    instruction,
+    all_claims: allClaims,
+    title,
   });
-  if (!res.ok) throw new Error(await parseErrorResponse(res));
-  const data = await res.json();
-  if (!data.refined?.refined_text) throw new Error('Invalid refinement response');
-  return data.refined;
+  const refined = data.refined as { refined_text: string; explanation: string } | undefined;
+  if (!refined?.refined_text) throw new Error('Invalid refinement response');
+  return refined;
 }
 
 export async function analyzeClaimScope(claims: Array<{ number: number; text: string }>): Promise<ClaimScopeAnalysis[]> {
-  const headers = await getAuthHeaders();
-  const res = await fetch(`${FUNCTIONS_URL}/analyze-scope`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ claims }),
-  });
-  if (!res.ok) {
-    throw new Error(await parseErrorResponse(res));
-  }
-  const data = await res.json();
+  const data = await callFunction('analyze-scope', { claims });
   if (!Array.isArray(data.analysis)) {
     throw new Error('Invalid response: expected an array of analyses');
   }
